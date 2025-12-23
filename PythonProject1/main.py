@@ -2,9 +2,8 @@ import telebot
 import sqlite3
 from telebot import types
 
-# ---------------- НАЛАШТУВАННЯ ----------------
 bot = telebot.TeleBot("8234314802:AAFa5w9U7uIBnlmsCYapWUSjOpjw0KOBvl8")
-ADMIN_IDS = [799581078, 5195186514]
+ADMIN_IDS = [799581078, 5195186514]  # ← ТУТ СВІЙ TELEGRAM ID
 
 # ---------------- БАЗА ДАНИХ ----------------
 conn = sqlite3.connect("library.db", check_same_thread=False)
@@ -69,6 +68,10 @@ def register_start(message):
     cursor.execute("SELECT id, title FROM events")
     events = cursor.fetchall()
 
+    if not events:
+        bot.send_message(message.chat.id, "Наразі немає доступних заходів.")
+        return
+
     text = "Оберіть номер заходу:\n"
     for e in events:
         text += f"{e[0]}. {e[1]}\n"
@@ -90,13 +93,14 @@ def choose_event(message):
         bot.send_message(message.chat.id, "❌ Введіть номер цифрами.")
 
 def get_name(message, event_title):
+    name = message.text
     bot.send_message(message.chat.id, "Введіть номер телефону:")
-    bot.register_next_step_handler(message, get_phone, message.text, event_title)
+    bot.register_next_step_handler(message, get_phone, name, event_title)
 
 def get_phone(message, name, event_title):
     phone = message.text
     if not phone.isdigit():
-        bot.send_message(message.chat.id, "❌ Невірний формат телефону. Введіть ще раз:")
+        bot.send_message(message.chat.id, "❌ Невірний формат телефону.")
         bot.register_next_step_handler(message, get_phone, name, event_title)
         return
 
@@ -117,9 +121,40 @@ def admin_panel(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("📋 Переглянути записи")
     markup.add("➕ Додати захід", "✏️ Редагувати захід")
+    markup.add("🗑 Видалити захід")
     markup.add("🗑 Очистити всі записи")
     markup.add("⬅️ Назад")
+
     bot.send_message(message.chat.id, "🔐 Адмін-панель", reply_markup=markup)
+
+# ---------- ПЕРЕГЛЯНУТИ ЗАПИСИ ----------
+@bot.message_handler(func=lambda m: m.text == "📋 Переглянути записи")
+def view_registrations(message):
+    if message.chat.id not in ADMIN_IDS:
+        return
+
+    cursor.execute("SELECT name, phone, event_title FROM registrations")
+    regs = cursor.fetchall()
+
+    if not regs:
+        bot.send_message(message.chat.id, "Записів немає")
+        return
+
+    text = "📋 Список записів:\n\n"
+    for r in regs:
+        text += f"👤 {r[0]}\n📞 {r[1]}\n🎫 {r[2]}\n\n"
+
+    bot.send_message(message.chat.id, text)
+
+# ---------- ОЧИСТИТИ ЗАПИСИ ----------
+@bot.message_handler(func=lambda m: m.text == "🗑 Очистити всі записи")
+def clear_regs(message):
+    if message.chat.id not in ADMIN_IDS:
+        return
+
+    cursor.execute("DELETE FROM registrations")
+    conn.commit()
+    bot.send_message(message.chat.id, "🗑 Усі записи видалено")
 
 # ---------- ДОДАТИ ЗАХІД ----------
 @bot.message_handler(func=lambda m: m.text == "➕ Додати захід")
@@ -134,12 +169,12 @@ def add_event_date(message):
 
 def add_event_time(message, title):
     date = message.text
-    bot.send_message(message.chat.id, "Введіть час (год:хв):")
+    bot.send_message(message.chat.id, "Введіть час:")
     bot.register_next_step_handler(message, add_event_location, title, date)
 
 def add_event_location(message, title, date):
     time = message.text
-    bot.send_message(message.chat.id, "Введіть місце проведення:")
+    bot.send_message(message.chat.id, "Введіть місце:")
     bot.register_next_step_handler(message, save_event, title, date, time)
 
 def save_event(message, title, date, time):
@@ -151,51 +186,34 @@ def save_event(message, title, date, time):
     conn.commit()
     bot.send_message(message.chat.id, "✅ Захід додано")
 
-# ---------- РЕДАГУВАТИ ЗАХІД ----------
-@bot.message_handler(func=lambda m: m.text == "✏️ Редагувати захід")
-def edit_event_start(message):
+# ---------- ВИДАЛИТИ ЗАХІД ----------
+@bot.message_handler(func=lambda m: m.text == "🗑 Видалити захід")
+def delete_event_start(message):
+    if message.chat.id not in ADMIN_IDS:
+        return
+
     cursor.execute("SELECT id, title FROM events")
     events = cursor.fetchall()
+
+    if not events:
+        bot.send_message(message.chat.id, "Немає заходів для видалення")
+        return
 
     text = "Оберіть ID заходу:\n"
     for e in events:
         text += f"{e[0]}. {e[1]}\n"
 
     bot.send_message(message.chat.id, text)
-    bot.register_next_step_handler(message, edit_event_title)
+    bot.register_next_step_handler(message, delete_event_confirm)
 
-def edit_event_title(message):
+def delete_event_confirm(message):
     try:
         event_id = int(message.text)
-        bot.send_message(message.chat.id, "Введіть нову назву заходу:")
-        bot.register_next_step_handler(message, edit_event_date, event_id)
+        cursor.execute("DELETE FROM events WHERE id=?", (event_id,))
+        conn.commit()
+        bot.send_message(message.chat.id, "🗑 Захід видалено")
     except:
         bot.send_message(message.chat.id, "❌ Невірний ID")
-
-def edit_event_date(message, event_id):
-    title = message.text
-    bot.send_message(message.chat.id, "Введіть нову дату:")
-    bot.register_next_step_handler(message, edit_event_time, event_id, title)
-
-def edit_event_time(message, event_id, title):
-    date = message.text
-    bot.send_message(message.chat.id, "Введіть новий час:")
-    bot.register_next_step_handler(message, edit_event_location, event_id, title, date)
-
-def edit_event_location(message, event_id, title, date):
-    time = message.text
-    bot.send_message(message.chat.id, "Введіть нове місце:")
-    bot.register_next_step_handler(message, update_event, event_id, title, date, time)
-
-def update_event(message, event_id, title, date, time):
-    location = message.text
-    cursor.execute("""
-        UPDATE events
-        SET title=?, date=?, time=?, location=?
-        WHERE id=?
-    """, (title, date, time, location, event_id))
-    conn.commit()
-    bot.send_message(message.chat.id, "✅ Захід оновлено")
 
 # ---------- НАЗАД ----------
 @bot.message_handler(func=lambda m: m.text == "⬅️ Назад")
